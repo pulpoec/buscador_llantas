@@ -107,7 +107,7 @@ Desde la carpeta del proyecto:
 ```powershell
 git init
 git add .
-git commit -m "feat: plugin buscador llantas v1.2.0"
+git commit -m "feat: plugin buscador llantas v1.3.0"
 ```
 
 ### Flujo recomendado de versionado
@@ -122,27 +122,61 @@ Comandos:
 
 ```powershell
 git add .
-git commit -m "release: v1.2.0"
-git tag v1.2.0
+git commit -m "release: v1.3.0"
+git tag v1.3.0
 git push origin main --tags
+```
+
+### GitHub Actions incluido
+
+El repositorio incluye el workflow [.github/workflows/release.yml](../.github/workflows/release.yml).
+
+Funcionamiento:
+
+1. Detecta cualquier push de tags `v*`.
+2. Verifica que la version del plugin coincida con el tag.
+3. Genera automaticamente `buscador_llantas.zip`.
+4. Publica una GitHub Release y adjunta el ZIP.
+
+Flujo recomendado:
+
+```powershell
+git add .
+git commit -m "release: v1.3.0"
+git tag v1.3.0
+git push origin main
+git push origin v1.3.0
 ```
 
 ## Actualizaciones automaticas desde GitHub
 
-El plugin incluye un verificador de releases publicas de GitHub.
+El plugin incluye un verificador de releases de GitHub para repos publicos y privados.
 
-Para activarlo, define la constante en `wp-config.php`:
+Configuracion minima en `wp-config.php`:
 
 ```php
-define( 'BUSCADOR_LLANTAS_GITHUB_REPOSITORY', 'https://github.com/USUARIO/REPOSITORIO' );
+define( 'BUSCADOR_LLANTAS_GITHUB_REPOSITORY', 'git@github.com:pulpoec/buscador_llantas.git' );
 ```
+
+Para repos privados, agrega ademas un token con permisos de lectura sobre el repositorio:
+
+```php
+define( 'BUSCADOR_LLANTAS_GITHUB_TOKEN', 'tu_token_github' );
+```
+
+El token recomendado debe tener al menos permiso `repo:read` o acceso equivalente para leer releases y descargar assets.
 
 Condiciones para que funcione correctamente:
 
-1. El repositorio debe ser publico.
-2. Debe existir una release publicada.
-3. La release debe incluir un asset llamado exactamente `buscador_llantas.zip`.
-4. El tag de la release debe coincidir con la version, por ejemplo `v1.2.0`.
+1. Debe existir una release publicada.
+2. La release debe incluir un asset llamado exactamente `buscador_llantas.zip`.
+3. El tag de la release debe coincidir con la version, por ejemplo `v1.3.0`.
+
+Notas:
+
+- En repos publicos, el token no es obligatorio.
+- En repos privados, el token si es necesario para consultar la release y descargar el ZIP desde WordPress.
+- El updater soporta tanto URLs `https://github.com/...` como `git@github.com:...`.
 
 ## Mantenimiento
 

@@ -3,7 +3,7 @@
  * Plugin Name: Buscador de Llantas Pro por Taxonomias
  * Plugin URI: https://pulpo.ec
  * Description: Buscador avanzado de llantas por taxonomias (ancho, perfil y diametro) para WooCommerce.
- * Version: 1.2.0
+ * Version: 1.3.0
  * Author: Equipo Senior PULPO
  * License: GPLv2 or later
  * Text Domain: buscador-llantas
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 	final class Buscador_Llantas_Pro_Taxonomias {
-		const VERSION      = '1.2.0';
+		const VERSION      = '1.3.0';
 		const NONCE_ACTION = 'buscador_llantas_filtrar';
 		const NONCE_NAME   = 'buscador_llantas_nonce';
 
@@ -37,6 +37,7 @@ if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 			add_action( 'wp_enqueue_scripts', array( $this, 'register_assets' ) );
 			add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'inject_plugin_update' ) );
 			add_filter( 'plugins_api', array( $this, 'provide_plugin_information' ), 20, 3 );
+			add_filter( 'http_request_args', array( $this, 'inject_github_auth_headers' ), 10, 2 );
 
 			// Compatibilidad con widget de WooCommerce "Filtros Activos".
 			add_action( 'woocommerce_widget_layered_nav_filters_start', array( $this, 'render_active_filters_widget_items' ), 10, 2 );
@@ -690,7 +691,60 @@ if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 		}
 
 		/**
-		 * Obtiene la informacion de la ultima release publica en GitHub.
+		 * Obtiene un token opcional para consultas y descargas privadas desde GitHub.
+		 *
+		 * @return string
+		 */
+		private function get_github_token() {
+			$token = defined( 'BUSCADOR_LLANTAS_GITHUB_TOKEN' ) ? BUSCADOR_LLANTAS_GITHUB_TOKEN : '';
+
+			/**
+			 * Permite definir un token GitHub para repositorios privados.
+			 *
+			 * @param string $token Token GitHub.
+			 */
+			$token = apply_filters( 'buscador_llantas_github_token', $token );
+
+			return is_string( $token ) ? trim( $token ) : '';
+		}
+
+		/**
+		 * Inyecta cabeceras de autenticacion cuando WordPress consulta o descarga desde GitHub.
+		 *
+		 * @param array  $args Argumentos HTTP.
+		 * @param string $url  URL de la peticion.
+		 * @return array
+		 */
+		public function inject_github_auth_headers( $args, $url ) {
+			$token     = $this->get_github_token();
+			$repo_path = $this->extract_github_repo_path( $this->get_github_repository_url() );
+
+			if ( '' === $token || '' === $repo_path || ! is_string( $url ) ) {
+				return $args;
+			}
+
+			if ( false === strpos( $url, 'github.com' ) ) {
+				return $args;
+			}
+
+			if ( ! isset( $args['headers'] ) || ! is_array( $args['headers'] ) ) {
+				$args['headers'] = array();
+			}
+
+			$args['headers']['Authorization'] = 'Bearer ' . $token;
+			$args['headers']['User-Agent']    = 'buscador-llantas-plugin-updater';
+
+			if ( false !== strpos( $url, 'api.github.com/repos/' . $repo_path . '/releases/assets/' ) ) {
+				$args['headers']['Accept'] = 'application/octet-stream';
+			} elseif ( false !== strpos( $url, 'api.github.com/repos/' . $repo_path . '/releases/latest' ) ) {
+				$args['headers']['Accept'] = 'application/vnd.github+json';
+			}
+
+			return $args;
+		}
+
+		/**
+		 * Obtiene la informacion de la ultima release en GitHub.
 		 *
 		 * @return array<string,string>
 		 */
@@ -714,10 +768,7 @@ if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 			$response = wp_remote_get(
 				'https://api.github.com/repos/' . $repo_path . '/releases/latest',
 				array(
-					'headers' => array(
-						'Accept'     => 'application/vnd.github+json',
-						'User-Agent' => 'buscador-llantas-plugin-updater',
-					),
+					'headers' => $this->get_github_api_headers(),
 					'timeout' => 15,
 				)
 			);
@@ -745,12 +796,19 @@ if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 		}
 
 		/**
-		 * Extrae owner/repo desde una URL GitHub.
+		 * Extrae owner/repo desde una URL GitHub SSH o HTTPS.
 		 *
 		 * @param string $url URL del repositorio.
 		 * @return string
 		 */
 		private function extract_github_repo_path( $url ) {
+			if ( 0 === strpos( $url, 'git@github.com:' ) ) {
+				$path = substr( $url, strlen( 'git@github.com:' ) );
+				$path = preg_replace( '/\.git$/', '', $path );
+
+				return is_string( $path ) ? trim( $path, '/' ) : '';
+			}
+
 			$parts = wp_parse_url( $url );
 			if ( empty( $parts['host'] ) || false === strpos( (string) $parts['host'], 'github.com' ) || empty( $parts['path'] ) ) {
 				return '';
@@ -769,6 +827,9 @@ if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 		 * @return string
 		 */
 		private function find_release_package_url( $release_data ) {
+			$repo_path  = $this->extract_github_repo_path( $this->get_github_repository_url() );
+			$has_token  = '' !== $this->get_github_token();
+
 			if ( ! empty( $release_data['assets'] ) && is_array( $release_data['assets'] ) ) {
 				foreach ( $release_data['assets'] as $asset ) {
 					if ( empty( $asset['name'] ) || empty( $asset['browser_download_url'] ) ) {
@@ -776,12 +837,35 @@ if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 					}
 
 					if ( 'buscador_llantas.zip' === $asset['name'] ) {
+						if ( $has_token && '' !== $repo_path && ! empty( $asset['id'] ) ) {
+							return 'https://api.github.com/repos/' . $repo_path . '/releases/assets/' . absint( $asset['id'] );
+						}
+
 						return (string) $asset['browser_download_url'];
 					}
 				}
 			}
 
 			return '';
+		}
+
+		/**
+		 * Cabeceras base para consumir la API de GitHub.
+		 *
+		 * @return array<string,string>
+		 */
+		private function get_github_api_headers() {
+			$headers = array(
+				'Accept'     => 'application/vnd.github+json',
+				'User-Agent' => 'buscador-llantas-plugin-updater',
+			);
+
+			$token = $this->get_github_token();
+			if ( '' !== $token ) {
+				$headers['Authorization'] = 'Bearer ' . $token;
+			}
+
+			return $headers;
 		}
 
 		/**
