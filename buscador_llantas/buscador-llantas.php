@@ -3,7 +3,7 @@
  * Plugin Name: Buscador de Llantas Pro por Taxonomias
  * Plugin URI: https://pulpo.ec
  * Description: Buscador avanzado de llantas por taxonomias (ancho, perfil y diametro) para WooCommerce.
- * Version: 1.3.0
+ * Version: 1.3.1
  * Author: Equipo Senior PULPO
  * License: GPLv2 or later
  * Text Domain: buscador-llantas
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 	final class Buscador_Llantas_Pro_Taxonomias {
-		const VERSION      = '1.3.0';
+		const VERSION      = '1.4.0';
 		const NONCE_ACTION = 'buscador_llantas_filtrar';
 		const NONCE_NAME   = 'buscador_llantas_nonce';
 
@@ -38,6 +38,9 @@ if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 			add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'inject_plugin_update' ) );
 			add_filter( 'plugins_api', array( $this, 'provide_plugin_information' ), 20, 3 );
 			add_filter( 'http_request_args', array( $this, 'inject_github_auth_headers' ), 10, 2 );
+
+			// Hook principal para el loop de productos WooCommerce (tienda/shop page).
+			add_action( 'woocommerce_product_query', array( $this, 'apply_filters_to_wc_product_query' ), 20 );
 
 			// Compatibilidad con widget de WooCommerce "Filtros Activos".
 			add_action( 'woocommerce_widget_layered_nav_filters_start', array( $this, 'render_active_filters_widget_items' ), 10, 2 );
@@ -324,7 +327,6 @@ if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 					<?php endforeach; ?>
 
 					<?php wp_nonce_field( self::NONCE_ACTION, self::NONCE_NAME ); ?>
-					<input type="hidden" name="post_type" value="product" />
 					<button type="submit" class="buscador-llantas-submit"><?php esc_html_e( 'Buscar Llantas', 'buscador-llantas' ); ?></button>
 					<a class="buscador-llantas-clear" href="<?php echo esc_url( $shop_url ); ?>"><?php esc_html_e( 'Limpiar filtros', 'buscador-llantas' ); ?></a>
 				</form>
@@ -363,6 +365,9 @@ if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 				return;
 			}
 
+            // Forzar post_type=product si hay filtros activos del buscador
+            $query->set( 'post_type', 'product' );
+
 			$new_tax_query = array();
 			foreach ( $selected as $taxonomy => $slug ) {
 				$new_tax_query[] = array(
@@ -383,6 +388,48 @@ if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 			$existing_tax_query   = array_merge( $existing_tax_query, $new_tax_query );
 
 			$query->set( 'tax_query', $this->normalize_tax_query( $existing_tax_query ) );
+		}
+
+		/**
+		 * Aplica los filtros al loop de productos de WooCommerce (hook woocommerce_product_query).
+		 *
+		 * @param WP_Query $q Query del loop de productos WooCommerce.
+		 */
+		public function apply_filters_to_wc_product_query( $q ) {
+			$selected = array();
+			foreach ( array_keys( $this->taxonomies ) as $taxonomy ) {
+				$value = $this->get_requested_term_slug( $taxonomy );
+				if ( '' !== $value ) {
+					$selected[ $taxonomy ] = $value;
+				}
+			}
+
+			if ( empty( $selected ) ) {
+				return;
+			}
+
+			if ( ! $this->is_valid_filter_request() ) {
+				return;
+			}
+
+			$new_tax_query = array();
+			foreach ( $selected as $taxonomy => $slug ) {
+				$new_tax_query[] = array(
+					'taxonomy'         => $taxonomy,
+					'field'            => 'slug',
+					'terms'            => array( $slug ),
+					'operator'         => 'IN',
+					'include_children' => false,
+				);
+			}
+
+			$existing_tax_query = $q->get( 'tax_query' );
+			if ( ! is_array( $existing_tax_query ) ) {
+				$existing_tax_query = array();
+			}
+
+			$existing_tax_query = array_merge( $existing_tax_query, $new_tax_query );
+			$q->set( 'tax_query', $this->normalize_tax_query( $existing_tax_query ) );
 		}
 
 		/**
@@ -759,7 +806,7 @@ if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 				return array();
 			}
 
-			$cache_key = 'buscador_llantas_release_' . md5( $repo_path );
+			$cache_key = 'buscador-llantas_release_' . md5( $repo_path );
 			$cached    = get_transient( $cache_key );
 			if ( is_array( $cached ) ) {
 				return $cached;
