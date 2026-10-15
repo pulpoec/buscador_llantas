@@ -1,10 +1,12 @@
 # Buscador de Llantas Pro por Taxonomias
 
-Plugin de WordPress para WooCommerce que permite filtrar productos por tres taxonomias personalizadas:
+Plugin de WordPress para WooCommerce que permite filtrar productos por medidas de llanta o por vehiculo:
 
 - `ancho_llanta`
 - `perfil_llanta`
 - `diametro_rin`
+- `marca_vehiculo`
+- `modelo_vehiculo`
 
 ## Requisitos
 
@@ -20,11 +22,13 @@ Plugin de WordPress para WooCommerce que permite filtrar productos por tres taxo
 
 ## Taxonomias que registra
 
-El plugin registra tres taxonomias no jerarquicas asociadas al post type `product`:
+El plugin registra cinco taxonomias no jerarquicas asociadas al post type `product`:
 
 - Ancho Llanta
 - Perfil Llanta
 - Diametro Rin
+- Marca de Vehiculo
+- Modelo de Vehiculo
 
 Estas taxonomias aparecen en la edicion del producto para que el administrador pueda asignar valores.
 
@@ -35,6 +39,13 @@ Estas taxonomias aparecen en la edicion del producto para que el administrador p
 3. Ir a `Productos > Diametro Rin` y crear valores como `15`, `16`, `17`.
 4. Editar cada producto y asignar un valor en cada taxonomia segun corresponda.
 
+## Como cargar marca y modelo del vehiculo
+
+1. Ir a `Productos > Marca de Vehiculo` y crear las marcas.
+2. Ir a `Productos > Modelo de Vehiculo` y crear los modelos.
+3. Editar cada producto de llanta y asignarle una marca y un modelo.
+4. Al seleccionar una marca en el buscador, el selector de modelo mostrara los modelos asociados a productos de esa marca.
+
 ## Shortcode
 
 Usar el shortcode:
@@ -43,13 +54,19 @@ Usar el shortcode:
 [buscador_llantas]
 ```
 
-Esto renderiza un formulario con tres selects:
+Esto renderiza la version normal del formulario, con tres selects y el enlace para limpiar filtros. Para insertar una version compacta en un espacio reducido, usar:
 
-- Ancho
-- Perfil
-- Diametro
+```text
+[buscador_llantas tipo="compacto"]
+```
 
-El formulario se envia por GET a la pagina de tienda de WooCommerce.
+La version compacta tiene dos pestañas independientes:
+
+- **Por medida**: ancho, perfil y diametro.
+- **Por vehiculo**: marca y modelo. Los modelos disponibles dependen de la marca elegida.
+
+Cada pestaña envía solo sus propios filtros por GET a la pagina de tienda de WooCommerce. La version normal sigue mostrando unicamente la busqueda por medida.
+
 
 ## Como funciona el filtrado
 
@@ -64,6 +81,8 @@ Ejemplo:
 - `diametro_rin = 15`
 
 El resultado mostrara solo productos que cumplan simultaneamente las tres condiciones.
+
+En la busqueda por vehiculo, el resultado mostrara productos que tengan asignados simultaneamente la marca y el modelo seleccionados.
 
 ## Compatibilidad con filtros activos
 
@@ -97,6 +116,10 @@ Los productos no tienen asignados los valores correctos o la combinacion buscada
 ### En la lista de productos del admin se ven columnas montadas
 
 Desde la version `1.2.0` las columnas automaticas de estas taxonomias quedan desactivadas para evitar que la tabla del administrador se rompa visualmente.
+
+## Configuracion de estilos
+
+Desde la version `1.5.0` existe una pantalla en **Ajustes → Buscador Llantas** para configurar colores, tipografia, selectores, botones y pestanas (con selector de color). Los valores se guardan en la opcion `buscador_llantas_styles` y se aplican como variables CSS `--bl-*`. El boton **Restaurar valores por defecto** borra la configuracion guardada.
 
 ## Git y releases
 
