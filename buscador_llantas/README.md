@@ -121,6 +121,83 @@ Desde la version `1.2.0` las columnas automaticas de estas taxonomias quedan des
 
 Desde la version `1.5.0` existe una pantalla en **Ajustes → Buscador Llantas** para configurar colores, tipografia, selectores, botones y pestanas (con selector de color). Los valores se guardan en la opcion `buscador_llantas_styles` y se aplican como variables CSS `--bl-*`. El boton **Restaurar valores por defecto** borra la configuracion guardada.
 
+## Sincronizacion de categorias de WooCommerce
+
+En **Ajustes → Buscador Llantas**, pulsar **Sincronizar categorias** para consultar:
+
+```text
+GET https://app.frenoseguro.com:7575/freno/gruposproductos?lote=1
+```
+
+El servidor debe devolver un arreglo JSON:
+
+```json
+[
+  { "_id": "GPR0007", "description": "FRENOS" },
+  { "_id": "GPR0011", "description": "LLANTAS" }
+]
+```
+
+- `description` se guarda como nombre de la categoria de producto (`product_cat`).
+- `_id` se guarda en el metadato de termino `_buscador_llantas_grupo_producto_id`, para actualizar la misma categoria aunque cambie su nombre.
+- Si ya existe una categoria con el mismo nombre y sin identificador externo, se reutiliza.
+- No se eliminan categorias ausentes en la respuesta ni se asignan categorias a productos.
+- Solo se consulta `lote=1`; no se recorren otros lotes automaticamente.
+- Se requiere WooCommerce activo y permisos de administrador y de gestion de categorias de productos.
+- La accion esta protegida por nonce. Se notifican errores de conexion, HTTP, formato y guardado; no se desactiva la validacion TLS.
+- Si un error ocurre durante el guardado, los cambios anteriores se conservan y se puede reintentar. Un conflicto de nombres con otro identificador se informa sin fusionar categorias.
+
+La consulta ocurre unicamente al pulsar el boton en WordPress; llamar directamente a la URL del servidor no ejecuta el plugin.
+
+### Pruebas del importador
+
+Desde la raiz del repositorio:
+
+```powershell
+php .\tests\category-sync-test.php
+```
+
+Las [pruebas aisladas](../tests/category-sync-test.php) simulan las funciones de WordPress y la respuesta HTTP. Verifican importacion, reintentos sin duplicados, renombrado por identificador, conflictos, errores, permisos, nonce y redireccion. No sustituyen una prueba en staging con WooCommerce y el servidor real.
+
+## Sincronizacion de imagenes por SKU
+
+En **Ajustes → Buscador Llantas → Imagenes de productos por SKU**:
+
+1. Configurar la carpeta relativa a `uploads`: **`frenoseguro_img/images-web`**. Corresponde a `/wp-content/uploads/frenoseguro_img/images-web/`; no incluir `21028.jpg` ni otro nombre de archivo.
+2. Elegir **Desactivada**, **Cada hora**, **Cada 12 horas** o **Cada dia** y guardar. La sincronizacion automatica esta desactivada inicialmente; al habilitarla, la primera ejecucion se programa para dentro de un minuto.
+3. Opcionalmente activar **Al guardar productos** para relacionar las imagenes tambien al crear o actualizar productos con SKU mediante WooCommerce.
+4. Pulsar **Ejecutar ahora** para iniciar una sincronizacion manual, incluso con la automatica desactivada. Guardar primero los cambios de carpeta.
+
+### Relacion de archivos y productos
+
+- El nombre coincide exactamente con el SKU: `21028.jpg` se asigna como principal al SKU `21028`. `021030.jpg` corresponde a `021030`, no a `21030`.
+- `021030-1.jpg`, `021030-2.png`, etc. se agregan a la galeria en orden numerico. Si el nombre completo corresponde a otro SKU, se reserva para ese otro producto.
+- Se admiten JPG/JPEG, PNG, WebP, GIF y AVIF, sujetos al soporte de imagenes de WordPress y del servidor.
+- La principal se actualiza solo si existe el archivo correspondiente. La galeria conserva sus imagenes anteriores y agrega las nuevas sin repetir adjuntos.
+- Se reutilizan los adjuntos de la biblioteca por ruta. Los archivos se registran desde la carpeta local, sin descargarlos ni copiarlos; no mover ni eliminar los originales.
+- Si se reemplaza el contenido de un archivo en la misma ruta, se regeneran sus metadatos al volver a sincronizar.
+- No se crean productos ni se modifican precios, inventario o categorias. La sincronizacion del catalogo procesa productos, no variaciones individuales.
+- Solo se leen archivos directamente dentro de la carpeta configurada. La carpeta debe existir, ser legible por PHP y estar dentro de `uploads`.
+
+### Ejecucion y seguimiento
+
+La ejecucion manual procesa los primeros 10 productos inmediatamente y continua por lotes con **WP-Cron**. Recargar los ajustes para consultar estado, productos revisados y productos con relaciones actualizadas. El contador de productos actualizados no incluye archivos cuyo contenido cambio sin cambiar la relacion.
+
+WP-Cron depende de visitas al sitio y no garantiza una hora exacta. Para ejecuciones regulares en sitios sin trafico, configurar un cron del servidor que ejecute los eventos pendientes de WordPress. Desactivar la automatizacion detiene las futuras ejecuciones periodicas; un lote ya iniciado continua hasta terminar. Desactivar el plugin cancela ambos eventos; al reactivarlo se restaura la frecuencia guardada.
+
+Los errores se muestran en ajustes y se registran en **WooCommerce → Estado → Registros**, fuente `buscador-llantas-images`. Los cambios completados antes de un error se conservan; se puede reintentar sin duplicar adjuntos. No se omiten silenciosamente archivos inaccesibles o multiples archivos principales para el mismo SKU.
+
+Las acciones manuales requieren permisos de administrador, editar productos y subir archivos, y estan protegidas por nonce.
+
+### Pruebas aisladas
+
+```powershell
+php .\tests\image-sync-test.php
+php .\tests\category-sync-test.php
+```
+
+Las [pruebas de imagenes](../tests/image-sync-test.php) usan archivos PNG temporales y dobles de WordPress/WooCommerce. No sustituyen la prueba en staging de generacion de miniaturas, guardado real de productos, permisos de archivos y ejecucion de WP-Cron.
+
 ## Git y releases
 
 ### Inicializacion local

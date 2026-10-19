@@ -13,6 +13,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once __DIR__ . '/class-buscador-llantas-image-sync.php';
+
 if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 	final class Buscador_Llantas_Pro_Taxonomias {
 		const VERSION      = '1.5.0';
@@ -21,6 +23,9 @@ if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 		const VEHICLE_BRAND_TAXONOMY = 'marca_vehiculo';
 		const VEHICLE_MODEL_TAXONOMY = 'modelo_vehiculo';
 		const VEHICLE_MODELS_NONCE   = 'buscador_llantas_modelos_vehiculo';
+		const PRODUCT_GROUPS_URL     = 'https://app.frenoseguro.com:7575/freno/gruposproductos?lote=1';
+		const PRODUCT_GROUP_ID_META  = '_buscador_llantas_grupo_producto_id';
+		private $image_sync;
 
 		/**
 		 * Taxonomias soportadas por el plugin.
@@ -218,6 +223,131 @@ if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 			exit;
 		}
 
+		public function handle_sync_categories() {
+			if ( ! current_user_can( 'manage_options' ) || ! current_user_can( 'manage_product_terms' ) ) {
+				wp_die( esc_html__( 'No autorizado.', 'buscador-llantas' ), '', array( 'response' => 403 ) );
+			}
+			check_admin_referer( 'buscador_llantas_sync_categories' );
+
+			$result = $this->sync_product_categories();
+			if ( is_wp_error( $result ) ) {
+				wp_die(
+					esc_html( $result->get_error_message() . ' ' . __( 'Los cambios completados antes del error se conservan. Puedes volver a intentar la sincronizacion.', 'buscador-llantas' ) ),
+					esc_html__( 'Error al sincronizar categorias', 'buscador-llantas' ),
+					array( 'response' => 500, 'back_link' => true )
+				);
+			}
+
+			wp_safe_redirect(
+				add_query_arg(
+					array(
+						'page'               => 'buscador-llantas-estilos',
+						'categories_synced'  => '1',
+						'categories_created' => $result['created'],
+						'categories_updated' => $result['updated'],
+					),
+					admin_url( 'options-general.php' )
+				)
+			);
+			exit;
+		}
+
+		/**
+		 * Importa grupos como categorias, conservando la identidad externa entre sincronizaciones.
+		 *
+		 * @return array<string,int>|WP_Error
+		 */
+		public function sync_product_categories() {
+			if ( ! taxonomy_exists( 'product_cat' ) ) {
+				return new WP_Error( 'missing_product_categories', __( 'WooCommerce debe estar activo para sincronizar categorias.', 'buscador-llantas' ) );
+			}
+
+			$response = wp_remote_get(
+				self::PRODUCT_GROUPS_URL,
+				array(
+					'timeout' => 30,
+					'headers' => array( 'Accept' => 'application/json' ),
+				)
+			);
+			if ( is_wp_error( $response ) ) {
+				return new WP_Error( 'product_groups_request_failed', __( 'No se pudo consultar el servidor de categorias: ', 'buscador-llantas' ) . $response->get_error_message() );
+			}
+			$status = (int) wp_remote_retrieve_response_code( $response );
+			if ( 200 !== $status ) {
+				return new WP_Error( 'product_groups_http_error', sprintf( __( 'El servidor de categorias respondio con HTTP %d.', 'buscador-llantas' ), $status ) );
+			}
+
+			$groups = json_decode( wp_remote_retrieve_body( $response ) );
+			if ( JSON_ERROR_NONE !== json_last_error() || ! is_array( $groups ) ) {
+				return new WP_Error( 'invalid_product_groups', __( 'El servidor debe devolver un arreglo JSON de categorias.', 'buscador-llantas' ) );
+			}
+
+			$categories = array();
+			foreach ( $groups as $group ) {
+				if ( ! is_object( $group ) || ! isset( $group->_id, $group->description ) || ! is_string( $group->_id ) || ! is_string( $group->description ) ) {
+					return new WP_Error( 'invalid_product_group', __( 'Cada categoria debe contener _id y description de tipo texto.', 'buscador-llantas' ) );
+				}
+				$id   = sanitize_text_field( $group->_id );
+				$name = sanitize_text_field( $group->description );
+				if ( '' === $id || '' === $name || isset( $categories[ $id ] ) ) {
+					return new WP_Error( 'invalid_product_group', __( 'Las categorias deben tener identificadores unicos y nombres no vacios.', 'buscador-llantas' ) );
+				}
+				$categories[ $id ] = $name;
+			}
+
+			$result = array( 'created' => 0, 'updated' => 0 );
+			foreach ( $categories as $id => $name ) {
+				$id = (string) $id;
+				$matches = get_terms(
+					array(
+						'taxonomy'   => 'product_cat',
+						'hide_empty' => false,
+						'fields'     => 'ids',
+						'number'     => 2,
+						'meta_key'   => self::PRODUCT_GROUP_ID_META,
+						'meta_value' => $id,
+					)
+				);
+				if ( is_wp_error( $matches ) ) {
+					return $matches;
+				}
+				if ( count( $matches ) > 1 ) {
+					return new WP_Error( 'duplicate_product_group', sprintf( __( 'Varias categorias tienen el identificador %s. Corrige el duplicado antes de sincronizar.', 'buscador-llantas' ), $id ) );
+				}
+
+				$existing = get_term_by( 'name', $name, 'product_cat' );
+				$term_id  = empty( $matches ) ? 0 : (int) $matches[0];
+				if ( $existing && (int) $existing->term_id !== $term_id ) {
+					$existing_id = (string) get_term_meta( $existing->term_id, self::PRODUCT_GROUP_ID_META, true );
+					if ( $term_id || ( '' !== $existing_id && $id !== $existing_id ) ) {
+						return new WP_Error( 'product_group_name_conflict', sprintf( __( 'La categoria %s ya existe y no corresponde al identificador recibido.', 'buscador-llantas' ), $name ) );
+					}
+					$term_id = (int) $existing->term_id;
+				}
+
+				$created = ! $term_id;
+				$term    = $created
+					? wp_insert_term( wp_slash( $name ), 'product_cat' )
+					: wp_update_term( $term_id, 'product_cat', array( 'name' => wp_slash( $name ) ) );
+				if ( is_wp_error( $term ) ) {
+					return $term;
+				}
+
+				$term_id = (int) $term['term_id'];
+				if ( $id !== (string) get_term_meta( $term_id, self::PRODUCT_GROUP_ID_META, true ) ) {
+					$saved = update_term_meta( $term_id, self::PRODUCT_GROUP_ID_META, wp_slash( $id ) );
+					if ( is_wp_error( $saved ) ) {
+						return $saved;
+					}
+					if ( false === $saved ) {
+						return new WP_Error( 'product_group_meta_failed', sprintf( __( 'No se pudo guardar el identificador de la categoria %s.', 'buscador-llantas' ), $name ) );
+					}
+				}
+				++$result[ $created ? 'created' : 'updated' ];
+			}
+			return $result;
+		}
+
 		public function render_settings_page() {
 			if ( ! current_user_can( 'manage_options' ) ) {
 				return;
@@ -233,6 +363,27 @@ if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 				<?php if ( isset( $_GET['reset'] ) ) : ?>
 					<div class="notice notice-success is-dismissible"><p>Estilos restaurados a los valores por defecto.</p></div>
 				<?php endif; ?>
+				<?php if ( isset( $_GET['categories_synced'] ) ) : ?>
+					<div class="notice notice-success is-dismissible"><p><?php
+						echo esc_html(
+							sprintf(
+								__( 'Sincronizacion completada. Categorias creadas: %1$d. Categorias actualizadas o existentes: %2$d.', 'buscador-llantas' ),
+								isset( $_GET['categories_created'] ) ? absint( $_GET['categories_created'] ) : 0,
+								isset( $_GET['categories_updated'] ) ? absint( $_GET['categories_updated'] ) : 0
+							)
+						);
+					?></p></div>
+				<?php endif; ?>
+				<?php if ( current_user_can( 'manage_product_terms' ) ) : ?>
+					<h2><?php esc_html_e( 'Categorias de productos', 'buscador-llantas' ); ?></h2>
+					<p><?php esc_html_e( 'Consulta los grupos del servidor Freno Seguro y crea o actualiza las categorias de WooCommerce. No elimina categorias ni modifica productos.', 'buscador-llantas' ); ?></p>
+					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+						<input type="hidden" name="action" value="buscador_llantas_sync_categories" />
+						<?php wp_nonce_field( 'buscador_llantas_sync_categories' ); ?>
+						<?php submit_button( __( 'Sincronizar categorias', 'buscador-llantas' ), 'secondary' ); ?>
+					</form>
+				<?php endif; ?>
+				<?php $this->image_sync->render_settings(); ?>
 				<form method="post" action="options.php">
 					<?php settings_fields( 'buscador_llantas_styles_group' ); ?>
 					<?php foreach ( $groups as $group => $fields ) : ?>
@@ -277,10 +428,12 @@ if ( ! class_exists( 'Buscador_Llantas_Pro_Taxonomias' ) ) {
 		}
 
 		public function __construct() {
+			$this->image_sync = new Buscador_Llantas_Image_Sync();
 			add_action( 'admin_menu', array( $this, 'register_settings_page' ) );
 			add_action( 'admin_init', array( $this, 'register_settings' ) );
 			add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_assets' ) );
 			add_action( 'admin_post_buscador_llantas_reset_styles', array( $this, 'handle_reset_styles' ) );
+			add_action( 'admin_post_buscador_llantas_sync_categories', array( $this, 'handle_sync_categories' ) );
 			add_action( 'init', array( $this, 'register_taxonomies' ) );
 			add_shortcode( 'buscador_llantas', array( $this, 'render_shortcode' ) );
 			add_action( 'wp_ajax_buscador_llantas_modelos_vehiculo', array( $this, 'ajax_get_vehicle_models' ) );
